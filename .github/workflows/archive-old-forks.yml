@@ -1,0 +1,114 @@
+name: Archive Old Forks
+
+on:
+  schedule:
+    # Exécuter le 1er de chaque mois à 2h du matin
+    - cron: '0 2 1 * *'
+  workflow_dispatch: # Permet l'exécution manuelle
+
+jobs:
+  archive-forks:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Archive old forks
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORG_NAME: ${{ github.repository_owner }}
+        run: |
+          #!/bin/bash
+          set -e
+          
+          echo "🔍 Recherche des forks dans l'organisation: $ORG_NAME"
+          
+          # Calculer la date limite (6 mois en arrière)
+          SIX_MONTHS_AGO=$(date -d '6 months ago' +%s)
+          
+          # Compteurs
+          TOTAL_FORKS=0
+          ARCHIVED_COUNT=0
+          SKIPPED_COUNT=0
+          
+          # Récupérer tous les repositories de l'organisation (avec pagination)
+          PAGE=1
+          while true; do
+            echo "📄 Récupération de la page $PAGE..."
+            
+            REPOS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/orgs/$ORG_NAME/repos?per_page=100&page=$PAGE")
+            
+            # Vérifier si la page est vide
+            if [ "$(echo "$REPOS" | jq '. | length')" -eq 0 ]; then
+              break
+            fi
+            
+            # Parcourir chaque repository
+            echo "$REPOS" | jq -c '.[]' | while read -r repo; do
+              IS_FORK=$(echo "$repo" | jq -r '.fork')
+              REPO_NAME=$(echo "$repo" | jq -r '.name')
+              IS_ARCHIVED=$(echo "$repo" | jq -r '.archived')
+              UPDATED_AT=$(echo "$repo" | jq -r '.updated_at')
+              
+              # Vérifier si c'est un fork et pas déjà archivé
+              if [ "$IS_FORK" = "true" ] && [ "$IS_ARCHIVED" = "false" ]; then
+                TOTAL_FORKS=$((TOTAL_FORKS + 1))
+                
+                # Convertir la date de mise à jour en timestamp
+                UPDATED_TIMESTAMP=$(date -d "$UPDATED_AT" +%s)
+                
+                # Calculer l'âge en jours
+                AGE_DAYS=$(( ($(date +%s) - UPDATED_TIMESTAMP) / 86400 ))
+                
+                echo ""
+                echo "📦 Fork trouvé: $REPO_NAME"
+                echo "   Dernière mise à jour: $UPDATED_AT ($AGE_DAYS jours)"
+                
+                # Si plus de 6 mois (environ 180 jours)
+                if [ $UPDATED_TIMESTAMP -lt $SIX_MONTHS_AGO ]; then
+                  echo "   ⏰ Plus de 6 mois - Archivage en cours..."
+                  
+                  # Archiver le repository
+                  ARCHIVE_RESULT=$(curl -s -X PATCH \
+                    -H "Authorization: token $GITHUB_TOKEN" \
+                    -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/repos/$ORG_NAME/$REPO_NAME" \
+                    -d '{"archived":true}')
+                  
+                  if echo "$ARCHIVE_RESULT" | jq -e '.archived == true' > /dev/null; then
+                    echo "   ✅ Archivé avec succès!"
+                    ARCHIVED_COUNT=$((ARCHIVED_COUNT + 1))
+                  else
+                    echo "   ❌ Erreur lors de l'archivage"
+                    echo "$ARCHIVE_RESULT" | jq '.'
+                  fi
+                else
+                  echo "   ⏭️  Moins de 6 mois - Ignoré"
+                  SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+                fi
+              fi
+            done
+            
+            PAGE=$((PAGE + 1))
+          done
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 RÉSUMÉ"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Total de forks actifs trouvés: $TOTAL_FORKS"
+          echo "Forks archivés: $ARCHIVED_COUNT"
+          echo "Forks ignorés (< 6 mois): $SKIPPED_COUNT"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      - name: Create summary
+        if: always()
+        run: |
+          echo "### 📦 Archive des forks - Rapport d'exécution" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Le workflow s'est exécuté avec succès" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Consultez les logs pour voir les détails des forks archivés." >> $GITHUB_STEP_SUMMARY
