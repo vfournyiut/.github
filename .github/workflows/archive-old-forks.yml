@@ -16,7 +16,7 @@ jobs:
       
       - name: Archive old forks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ARCHIVE_FORK_WORKFLOW }}
           ORG_NAME: ${{ github.repository_owner }}
         run: |
           #!/bin/bash
